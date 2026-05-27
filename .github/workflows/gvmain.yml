@@ -1,0 +1,61 @@
+name: LocalAI + Tailscale Funnel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  localai-funnel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Start LocalAI (CPU)
+        run: |
+          docker run -d \
+            --name local-ai \
+            -p 8080:8080 \
+            localai/localai:latest-cpu
+
+      - name: Wait for LocalAI
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
+              echo "LocalAI is ready"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "LocalAI did not become ready in time"
+          docker logs local-ai
+          exit 1
+
+      - name: Enable Tailscale Funnel to LocalAI
+        run: |
+          sudo tailscale funnel --https=443 8080 --bg
+          tailscale funnel status
+
+      - name: Show LocalAI info
+        run: |
+          echo "LocalAI API (inside runner): http://127.0.0.1:8080"
+          echo "Public Funnel status:"
+          tailscale funnel status
+          echo "Models endpoint test:"
+          curl -fsS http://127.0.0.1:8080/v1/models || true
+
+      - name: Keep preview alive for a while
+        run: |
+          echo "Workflow will stay alive for 60 minutes so your Funnel URL keeps working."
+          sleep 3600
